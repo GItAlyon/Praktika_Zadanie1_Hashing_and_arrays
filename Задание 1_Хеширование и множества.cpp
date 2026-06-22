@@ -1,4 +1,4 @@
-﻿/*
+/*
  Задание: Хеш-таблица и множества
  Описание:
  1. Реализация хеш-таблицы (ассоциативный массив) с разрешением коллизий
@@ -416,7 +416,286 @@ bool hash_set_equals(HashSet* a, HashSet* b) {
     return hash_set_is_subset(a, b) && hash_set_is_subset(b, a);
 }
 
-// 8. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ВЫВОДА И ТЕСТИРОВАНИЯ
+// 8. РЕАЛИЗАЦИЯ МУЛЬТИМНОЖЕСТВА НА ОСНОВЕ ХЕШ-ТАБЛИЦЫ
+
+// Структура узла для мультимножества (хранит счётчик)
+typedef struct MultisetNode {
+    char* key;
+    int count;              // Количество вхождений
+    struct MultisetNode* next;
+} MultisetNode;
+
+// Структура мультимножества
+typedef struct {
+    MultisetNode** buckets;
+    int capacity;
+    int size;               // Общее количество элементов (с учётом дубликатов)
+    int unique_count;       // Количество уникальных элементов
+    int threshold;
+} Multiset;
+
+// Создание мультимножества
+Multiset* create_multiset(int initial_capacity) {
+    Multiset* ms = (Multiset*)malloc(sizeof(Multiset));
+    if (!ms) {
+        fprintf(stderr, "Ошибка выделения памяти для мультимножества.\n");
+        exit(EXIT_FAILURE);
+    }
+
+    ms->capacity = next_power_of_two(initial_capacity < 8 ? 8 : initial_capacity);
+    ms->size = 0;
+    ms->unique_count = 0;
+    ms->threshold = (int)(ms->capacity * 0.75f);
+    ms->buckets = (MultisetNode**)calloc(ms->capacity, sizeof(MultisetNode*));
+    if (!ms->buckets) {
+        fprintf(stderr, "Ошибка выделения памяти для бакетов мультимножества.\n");
+        free(ms);
+        exit(EXIT_FAILURE);
+    }
+    return ms;
+}
+
+// Освобождение мультимножества
+void free_multiset(Multiset* ms) {
+    if (!ms) return;
+
+    for (int i = 0; i < ms->capacity; i++) {
+        MultisetNode* current = ms->buckets[i];
+        while (current) {
+            MultisetNode* temp = current;
+            current = current->next;
+            free(temp->key);
+            free(temp);
+        }
+    }
+    free(ms->buckets);
+    free(ms);
+}
+
+// ПЕРЕХЕШИРОВАНИЕ ДЛЯ МУЛЬТИМНОЖЕСТВА
+
+// Увеличивает ёмкость мультимножества вдвое и перераспределяет все элементы
+void rehash_multiset(Multiset** ms_ptr) {
+    Multiset* old_ms = *ms_ptr;
+    Multiset* new_ms = create_multiset(old_ms->capacity * 2);
+    new_ms->size = 0;
+    new_ms->unique_count = 0;
+
+    // Проходим по всем старым цепочкам
+    for (int i = 0; i < old_ms->capacity; i++) {
+        MultisetNode* current = old_ms->buckets[i];
+        while (current) {
+            // Вставляем каждый элемент в новую таблицу
+            unsigned int index = hash_function(current->key, new_ms->capacity);
+            MultisetNode* new_node = (MultisetNode*)malloc(sizeof(MultisetNode));
+            new_node->key = _strdup(current->key);
+            new_node->count = current->count;  // Сохраняем количество вхождений
+            new_node->next = new_ms->buckets[index];
+            new_ms->buckets[index] = new_node;
+            new_ms->size += current->count;        // Увеличиваем общий размер
+            new_ms->unique_count++;                // Увеличиваем количество уникальных
+
+            current = current->next;
+        }
+    }
+
+    // Заменяем старую таблицу новой
+    free(old_ms->buckets);
+    free(old_ms);
+    *ms_ptr = new_ms;
+}
+
+// ОСНОВНЫЕ ОПЕРАЦИИ МУЛЬТИМНОЖЕСТВА
+
+// Добавление элемента в мультимножество
+void multiset_add(Multiset** ms_ptr, const char* element) {
+    Multiset* ms = *ms_ptr;
+
+    // Проверяем необходимость перехеширования
+    if (ms->size >= ms->threshold) {
+        rehash_multiset(ms_ptr);
+        ms = *ms_ptr;  // Обновляем указатель после перехеширования
+    }
+
+    unsigned int index = hash_function(element, ms->capacity);
+    MultisetNode* current = ms->buckets[index];
+
+    // Ищем элемент
+    while (current) {
+        if (strcmp(current->key, element) == 0) {
+            current->count++;      // Увеличиваем счётчик
+            ms->size++;            // Общий размер увеличивается
+            return;
+        }
+        current = current->next;
+    }
+
+    // Элемент не найден - добавляем новый с count = 1
+    MultisetNode* new_node = (MultisetNode*)malloc(sizeof(MultisetNode));
+    new_node->key = _strdup(element);
+    new_node->count = 1;
+    new_node->next = ms->buckets[index];
+    ms->buckets[index] = new_node;
+    ms->size++;
+    ms->unique_count++;
+}
+
+// Удаление одного вхождения элемента
+bool multiset_remove_one(Multiset* ms, const char* element) {
+    if (!ms) return false;
+
+    unsigned int index = hash_function(element, ms->capacity);
+    MultisetNode* current = ms->buckets[index];
+    MultisetNode* prev = NULL;
+
+    while (current) {
+        if (strcmp(current->key, element) == 0) {
+            if (current->count > 1) {
+                current->count--;   // Уменьшаем счётчик
+                ms->size--;
+                return true;
+            }
+            else {
+                // Удаляем узел полностью
+                if (prev) {
+                    prev->next = current->next;
+                }
+                else {
+                    ms->buckets[index] = current->next;
+                }
+                free(current->key);
+                free(current);
+                ms->size--;
+                ms->unique_count--;
+                return true;
+            }
+        }
+        prev = current;
+        current = current->next;
+    }
+    return false;  // Элемент не найден
+}
+
+// Удаление ВСЕХ вхождений элемента
+bool multiset_remove_all(Multiset* ms, const char* element) {
+    if (!ms) return false;
+
+    unsigned int index = hash_function(element, ms->capacity);
+    MultisetNode* current = ms->buckets[index];
+    MultisetNode* prev = NULL;
+
+    while (current) {
+        if (strcmp(current->key, element) == 0) {
+            // Удаляем узел со ВСЕМИ вхождениями
+            if (prev) {
+                prev->next = current->next;
+            }
+            else {
+                ms->buckets[index] = current->next;
+            }
+            ms->size -= current->count;  // Уменьшаем общий размер
+            ms->unique_count--;          // Уменьшаем количество уникальных
+            free(current->key);
+            free(current);
+            return true;
+        }
+        prev = current;
+        current = current->next;
+    }
+    return false;  // Элемент не найден
+}
+
+// Получение количества вхождений элемента
+int multiset_count(Multiset* ms, const char* element) {
+    if (!ms) return 0;
+
+    unsigned int index = hash_function(element, ms->capacity);
+    MultisetNode* current = ms->buckets[index];
+
+    while (current) {
+        if (strcmp(current->key, element) == 0) {
+            return current->count;
+        }
+        current = current->next;
+    }
+    return 0;  // Элемент не найден
+}
+
+// Проверка наличия элемента (хотя бы одно вхождение)
+bool multiset_contains(Multiset* ms, const char* element) {
+    return multiset_count(ms, element) > 0;
+}
+
+// Общий размер (все вхождения)
+int multiset_size(Multiset* ms) {
+    return ms ? ms->size : 0;
+}
+
+// Количество уникальных элементов
+int multiset_unique_count(Multiset* ms) {
+    return ms ? ms->unique_count : 0;
+}
+
+// ОПЕРАЦИИ НАД МУЛЬТИМНОЖЕСТВАМИ
+
+// Объединение мультимножеств (складываем количества вхождений)
+Multiset* multiset_union(Multiset* a, Multiset* b) {
+    Multiset* result = create_multiset(8);
+
+    // Добавляем все элементы из a
+    for (int i = 0; i < a->capacity; i++) {
+        MultisetNode* current = a->buckets[i];
+        while (current) {
+            // Добавляем элемент столько раз, сколько он встречается в a
+            for (int j = 0; j < current->count; j++) {
+                multiset_add(&result, current->key);
+            }
+            current = current->next;
+        }
+    }
+
+    // Добавляем все элементы из b
+    for (int i = 0; i < b->capacity; i++) {
+        MultisetNode* current = b->buckets[i];
+        while (current) {
+            // Добавляем элемент столько раз, сколько он встречается в b
+            for (int j = 0; j < current->count; j++) {
+                multiset_add(&result, current->key);
+            }
+            current = current->next;
+        }
+    }
+
+    return result;
+}
+
+// Пересечение мультимножеств (берём минимальное количество вхождений)
+Multiset* multiset_intersection(Multiset* a, Multiset* b) {
+    Multiset* result = create_multiset(8);
+
+    // Итерируемся по меньшему множеству для эффективности
+    Multiset* smaller = (a->unique_count < b->unique_count) ? a : b;
+    Multiset* larger = (a->unique_count < b->unique_count) ? b : a;
+
+    for (int i = 0; i < smaller->capacity; i++) {
+        MultisetNode* current = smaller->buckets[i];
+        while (current) {
+            int count_in_a = multiset_count(a, current->key);
+            int count_in_b = multiset_count(b, current->key);
+            int min_count = (count_in_a < count_in_b) ? count_in_a : count_in_b;
+
+            // Добавляем элемент min_count раз
+            for (int j = 0; j < min_count; j++) {
+                multiset_add(&result, current->key);
+            }
+            current = current->next;
+        }
+    }
+
+    return result;
+}
+
+// 9. ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ВЫВОДА И ТЕСТИРОВАНИЯ
 
 // Вывод содержимого хеш-таблицы
 void print_hash_table(HashTable* ht) {
@@ -460,12 +739,33 @@ void print_hash_set(HashSet* set, const char* name) {
     printf(" }\n");
 }
 
+// Вывод мультимножества
+void print_multiset(Multiset* ms, const char* name) {
+    if (!ms) {
+        printf("%s: пустое мультимножество (NULL).\n", name);
+        return;
+    }
+    printf("%s = { ", name);
+    bool first = true;
+    for (int i = 0; i < ms->capacity; i++) {
+        MultisetNode* current = ms->buckets[i];
+        while (current) {
+            if (!first) printf(", ");
+            printf("%s(%d)", current->key, current->count);
+            first = false;
+            current = current->next;
+        }
+    }
+    printf(" }\n");
+    printf("  (всего: %d, уникальных: %d)\n", ms->size, ms->unique_count);
+}
+
 // Функция для демонстрации кэширования 
 int expensive_computation(int x) {
     return x * x + 10;
 }
 
-// 9. ТЕСТЫ
+// 10. ТЕСТЫ
 
 void run_all_tests() {
     printf("ЗАПУСК ТЕСТОВ\n");
@@ -655,10 +955,90 @@ void run_all_tests() {
         (double)(end - start) / CLOCKS_PER_SEC);
     free_hash_table(ht);
 
+    printf("\n--- ТЕСТ 7: Мультимножество ---\n");
+
+    // Создание мультимножества
+    Multiset* ms = create_multiset(8);
+    printf("Создано мультимножество с ёмкостью %d\n", ms->capacity);
+
+    // Добавление элементов
+    multiset_add(&ms, "Ноутбук");
+    multiset_add(&ms, "Мышь");
+    multiset_add(&ms, "Ноутбук");      // Дубликат
+    multiset_add(&ms, "Ноутбук");      // Ещё один дубликат
+    multiset_add(&ms, "Клавиатура");
+    multiset_add(&ms, "Мышь");     // Ещё один дубликат
+
+    print_multiset(ms, "ms");
+    printf("Размер (все вхождения): %d\n", multiset_size(ms));           // 6
+    printf("Уникальных элементов: %d\n", multiset_unique_count(ms));     // 3
+    printf("Ноутбук встречается: %d раз\n", multiset_count(ms, "Ноутбук"));   // 3
+    printf("Мышь встречается: %d раз\n", multiset_count(ms, "Мышь")); // 2
+    printf("Коврик для мыши встречается: %d раз\n", multiset_count(ms, "Коврик для мыши"));   // 0
+
+    // Удаление одного Ноутбук
+    printf("\n--- Удаление одного Ноутбук ---\n");
+    multiset_remove_one(ms, "Ноутбук");
+    print_multiset(ms, "ms после удаления одного Ноутбук");
+    printf("Ноутбук встречается: %d раз\n", multiset_count(ms, "Ноутбук"));   // 2
+
+    // Удаление всех Мышь
+    printf("\n--- Удаление всех Мышь ---\n");
+    multiset_remove_all(ms, "Мышь");
+    print_multiset(ms, "ms после удаления всех Мышь");
+    printf("Мышь встречается: %d раз\n", multiset_count(ms, "Мышь")); // 0
+
+    // Проверка перехеширования
+    printf("\n--- Проверка перехеширования ---\n");
+    Multiset* ms2 = create_multiset(4);
+    printf("Начальная ёмкость: %d, порог: %d\n", ms2->capacity, ms2->threshold);
+
+    for (int i = 0; i < 15; i++) {
+        char key[20];
+        sprintf(key, "key_%d", i % 3);  // Создаём дубликаты
+        multiset_add(&ms2, key);
+        if (i % 5 == 0 || i == 14) {
+            printf("Добавлено %d элементов, ёмкость: %d\n", i + 1, ms2->capacity);
+        }
+    }
+    print_multiset(ms2, "ms2 после добавления 15 элементов");
+
+    // Операции над мультимножествами
+    printf("\n--- Операции над мультимножествами ---\n");
+    Multiset* A_mult = create_multiset(8);
+    Multiset* B_mult = create_multiset(8);
+
+    multiset_add(&A_mult, "a");
+    multiset_add(&A_mult, "a");
+    multiset_add(&A_mult, "b");
+    multiset_add(&A_mult, "c");
+
+    multiset_add(&B_mult, "a");
+    multiset_add(&B_mult, "b");
+    multiset_add(&B_mult, "b");
+    multiset_add(&B_mult, "d");
+
+    print_multiset(A_mult, "A");
+    print_multiset(B_mult, "B");
+
+    Multiset* union_ms = multiset_union(A_mult, B_mult);
+    print_multiset(union_ms, "A U B (объединение)");
+
+    Multiset* inter_ms = multiset_intersection(A_mult, B_mult);
+    print_multiset(inter_ms, "A ∩ B (пересечение)");
+
+    // Освобождение памяти
+    free_multiset(ms);
+    free_multiset(ms2);
+    free_multiset(A_mult);
+    free_multiset(B_mult);
+    free_multiset(union_ms);
+    free_multiset(inter_ms);
+
     printf("ВСЕ ТЕСТЫ ЗАВЕРШЕНЫ УСПЕШНО!\n");
 }
 
-// 10. ПРИМЕРЫ ПРИМЕНЕНИЯ
+// 11. ПРИМЕРЫ ПРИМЕНЕНИЯ
 
 void practical_examples() {
     printf("\nПРИМЕРЫ ПРИМЕНЕНИЯ\n");
